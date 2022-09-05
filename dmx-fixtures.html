@@ -1,0 +1,75 @@
+<script type="text/javascript">
+
+  RED.nodes.registerType('dmx par', {
+      category: 'lighting',
+      color: 'pink',
+      defaults: {
+        channel: {
+          value: 0,
+          required: true,
+          validate: RED.validators.number()
+        },
+        name: {
+          value: ''
+        },
+      },
+      inputs: 1,
+      outputs: 1,
+      outputLabels: 'to OLA node',
+      icon: "fa-arrow-right",
+      label: function() {
+        return this.name ? `${this.name} (CH${this.channel})` : `CH${this.channel}`;
+      }
+  });
+
+  RED.nodes.registerType('dmx scan', {
+      category: 'lighting',
+      color: 'pink',
+      defaults: {
+        channel: {
+          value: 0,
+          required: true,
+          validate: RED.validators.number()
+        },
+        name: {
+          value: ''
+        },
+      },
+      inputs: 1,
+      outputs: 1,
+      outputLabels: 'to OLA node',
+      icon: "fa-arrow-right",
+      label: function() {
+        return this.name ? `${this.name} (CH${this.channel})` : `CH${this.channel}`;
+      }
+  });
+</script>
+
+<script type="text/html" data-help-name="dmx par">
+  <p>A simple node that represents a PAR DMX fixture.</p>
+</script>
+<script type="text/html" data-template-name="dmx par">
+  <div class="form-row">
+    <label for="node-input-channel">DMX channel</label>
+    <input type="text" id="node-input-channel" placeholder="DMX channel">
+  </div>
+  <div class="form-row">
+    <label for="node-input-name">Fixture name</label>
+    <input type="text" id="node-input-name" placeholder="PAR LED 1">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="dmx scan">
+  <p>A simple node that represents a Scan DMX fixture.</p>
+</script>
+<script type="text/html" data-template-name="dmx scan">
+  <div class="form-row">
+    <label for="node-input-channel">DMX channel</label>
+    <input type="text" id="node-input-channel" placeholder="DMX channel">
+  </div>
+  <div class="form-row">
+    <label for="node-input-name">Fixture name</label>
+    <input type="text" id="node-input-name" placeholder="Scan 1">
+  </div>
+</script>
+
