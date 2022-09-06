@@ -2,7 +2,7 @@
 
   RED.nodes.registerType('dmx par', {
       category: 'lighting',
-      color: 'pink',
+      color: '#CC6699',
       defaults: {
         channel: {
           value: 0,
@@ -16,7 +16,7 @@
       inputs: 1,
       outputs: 1,
       outputLabels: 'to OLA node',
-      icon: "fa-arrow-right",
+      icon: "light.svg",
       label: function() {
         return this.name ? `${this.name} (CH${this.channel})` : `CH${this.channel}`;
       }
@@ -24,7 +24,7 @@
 
   RED.nodes.registerType('dmx scan', {
       category: 'lighting',
-      color: 'pink',
+      color: '#CC6699',
       defaults: {
         channel: {
           value: 0,
@@ -38,9 +38,42 @@
       inputs: 1,
       outputs: 1,
       outputLabels: 'to OLA node',
-      icon: "fa-arrow-right",
+      icon: "light.svg",
       label: function() {
         return this.name ? `${this.name} (CH${this.channel})` : `CH${this.channel}`;
+      }
+  });
+
+  RED.nodes.registerType('scheduler', {
+      category: 'lighting',
+      color: '#CC6699',
+      defaults: {
+        name: {
+          value: ''
+        },
+        outputs: {
+          value: 1,
+          required: true,
+          validate: RED.validators.number()
+        },
+        scenario: {
+          value: {}
+        }
+      },
+      inputs: 1,
+      outputs: 1,
+      outputLabels: function(index) {
+        return `to dmx fixture ${index}`
+      },
+      icon: "batch.svg",
+      label: function() {
+        return this.name || 'dmx scheduler'
+      },
+      oneditprepare: function() {
+        $("#node-input-scenario").typedInput({
+          type:"json",
+          types:["json"]
+      })        
       }
   });
 </script>
@@ -70,6 +103,24 @@
   <div class="form-row">
     <label for="node-input-name">Fixture name</label>
     <input type="text" id="node-input-name" placeholder="Scan 1">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="scheduler">
+  <p>A simple node that represents a scheduler.</p>
+</script>
+<script type="text/html" data-template-name="scheduler">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name" placeholder="Scenario 1">
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputs">Outputs</label>
+    <input type="text" id="node-input-outputs" placeholder="Number of outputs">
+  </div>
+  <div class="form-row">
+    <label for="node-input-scenario">Scenario</label>
+    <input type="text" id="node-input-scenario" placeholder="Scenario entries">
   </div>
 </script>
 
