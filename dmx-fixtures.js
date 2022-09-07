@@ -1,3 +1,5 @@
+const YAML = require('yaml')
+
 module.exports = function(RED) {
 
   const CH1 = 0
@@ -285,7 +287,7 @@ module.exports = function(RED) {
     RED.nodes.createNode(this, config);
     let timers = []
     const outputsCount = config.outputs
-    const scenario = typeof config.scenario === 'string' ? JSON.parse(config.scenario) : config.scenario
+    const scenario = YAML.parse(config.scenario)
 
     const updateStatus = () => {
       this.status({ text: `timers: ${timers.length}`, shape: 'dot', fill: timers.length ? 'green' : 'grey' })      
@@ -298,43 +300,51 @@ module.exports = function(RED) {
       updateStatus()
     }
 
-    const sendToOutput = (send, msg) => {
-      let outputs
-      if (Array.isArray(msg.outputs)) {
-        outputs = msg.outputs
-      } else if (isNumber(msg.outputs)) {
-        outputs = [msg.outputs]
+    const sendEffect = (send, effectName) => {
+      const effect = scenario.effects[effectName]
+      if (effect) {
+        let output
+        if (Array.isArray(effect.output)) {
+          output = effect.output
+        } else if (isNumber(effect.output)) {
+          output = [effect.output]
+        } else if (effect.output === 'all') {
+          output = Array.from({ length: outputsCount }, (v, i) => i)
+        } else {
+          output = [0]
+        }
+        const data = Array.from({ length: outputsCount })
+        output.forEach(o => { data[o] = effect })
+        console.log(`sending effect "${effectName}"`)
+        send(data)
       } else {
-        outputs = [0]
+        console.warn(`dmx-fixtures(scheduler): sendEffect(): effect "${effectName}" was not found in effects definition.`)
       }
-      const data = Array.from({ length: outputsCount })
-      outputs.forEach(o => { data[o] = msg })
-      send(data)
     }
 
-    const schedule = (delay, msg, send) => {
+    const schedule = (delay, effects, send) => {
       const id = timers.length
       const t = setTimeout(() => {
-        if (Array.isArray(msg)) {
-          msg.forEach(m => sendToOutput(send, m))
+        if (Array.isArray(effects)) {
+          effects.forEach(effect => sendEffect(send, effect))
         } else {
-          sendToOutput(send, msg)
+          sendEffect(send, effects)
         }
         timers.splice(timers.findIndex(t => t.id === id), 1)
         updateStatus()
       }, delay)
       timers.push({t, id})
-      console.log('dmx-fixtures(scheduler): schedule(): scheduled msg', msg, 'with delay', delay)
+      console.log(`dmx-fixtures(scheduler): schedule(): scheduled effects "${effects}" with delay ${delay}.`)
       console.log('dmx-fixtures(scheduler): schedule(): timers=', timers.length)
     }
 
     this.on('input', async (msg, send, done) => {
       clearAll()
       if (msg.topic !== 'stop') {
-        Object.keys(scenario).forEach(k => {
+        Object.keys(scenario.timeline).forEach(k => {
           const delay = (k === 'start') ? 0 : parseInt(k)
           if (!isNaN(delay)) {
-            schedule(delay, scenario[k], send)
+            schedule(delay, scenario.timeline[k], send)
             updateStatus()
           }
         })

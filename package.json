@@ -27,5 +27,8 @@
     "nodes": {
       "dmx-fixtures": "dmx-fixtures.js"
     }
+  },
+  "dependencies": {
+    "yaml": "^2.1.1"
   }
 }

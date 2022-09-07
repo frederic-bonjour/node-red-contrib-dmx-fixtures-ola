@@ -45,36 +45,47 @@
   });
 
   RED.nodes.registerType('scheduler', {
-      category: 'lighting',
-      color: '#CC6699',
-      defaults: {
-        name: {
-          value: ''
-        },
-        outputs: {
-          value: 1,
-          required: true,
-          validate: RED.validators.number()
-        },
-        scenario: {
-          value: {}
-        }
+    category: 'lighting',
+    color: '#CC6699',
+    defaults: {
+      name: {
+        value: ''
       },
-      inputs: 1,
-      outputs: 1,
-      outputLabels: function(index) {
-        return `to dmx fixture ${index}`
+      outputs: {
+        value: 1,
+        required: true,
+        validate: RED.validators.number()
       },
-      icon: "batch.svg",
-      label: function() {
-        return this.name || 'dmx scheduler'
-      },
-      oneditprepare: function() {
-        $("#node-input-scenario").typedInput({
-          type:"json",
-          types:["json"]
-      })        
+      scenario: {
+        value: {}
       }
+    },
+    inputs: 1,
+    outputs: 1,
+    outputLabels: function(index) {
+      return `to dmx fixture ${index}`
+    },
+    icon: "batch.svg",
+    label: function() {
+      return this.name || 'dmx scheduler'
+    },
+
+    oneditprepare: function() {
+      this.scenarioEditor = RED.editor.createEditor({
+        id: 'node-input-scenario-editor',
+        mode: 'ace/mode/yaml',
+        value: this.scenario
+      });
+    },
+    oneditsave: function() {
+      this.scenario = this.scenarioEditor.getValue();
+      this.scenarioEditor.destroy();
+      delete this.scenarioEditor;
+    },
+    oneditcancel: function() {
+        this.scenarioEditor.destroy();
+        delete this.scenarioEditor;
+    }
   });
 </script>
 
@@ -119,8 +130,8 @@
     <input type="text" id="node-input-outputs" placeholder="Number of outputs">
   </div>
   <div class="form-row">
-    <label for="node-input-scenario">Scenario</label>
-    <input type="text" id="node-input-scenario" placeholder="Scenario entries">
+    <label for="node-input-scenario-editor">Scenario</label>
+    <div style="height: 450px; min-height:150px;" class="node-text-editor" id="node-input-scenario-editor"></div>
   </div>
 </script>
 
