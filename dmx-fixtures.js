@@ -286,6 +286,7 @@ module.exports = function(RED) {
   function DmxScheduler(config) {
     RED.nodes.createNode(this, config);
     let timers = []
+    let nestedTimers = []
     const outputsCount = config.outputs
     const scenario = YAML.parse(config.scenario)
 
@@ -296,46 +297,100 @@ module.exports = function(RED) {
     const clearAll = () => {
       timers.forEach(t => clearTimeout(t.t))
       timers.length = 0
+      nestedTimers.forEach(i => clearTimeout(i))
+      nestedTimers.length = 0
       console.log('dmx-fixtures(scheduler): clearAll()')
       updateStatus()
     }
 
-    const sendEffect = (send, effectName) => {
-      const effect = scenario.effects[effectName]
-      if (effect) {
-        let output
-        if (Array.isArray(effect.output)) {
-          output = effect.output
-        } else if (isNumber(effect.output)) {
-          output = [effect.output]
-        } else if (effect.output === 'all') {
-          output = Array.from({ length: outputsCount }, (v, i) => i)
-        } else {
-          output = [0]
-        }
-        const data = Array.from({ length: outputsCount })
-        output.forEach(o => { data[o] = effect })
-        console.log(`sending effect "${effectName}"`)
-        send(data)
+    const sendEffect = (send, effect) => {
+      let output
+      if (Array.isArray(effect.output)) {
+        output = effect.output
+      } else if (isNumber(effect.output)) {
+        output = [effect.output]
+      } else if (effect.output === 'all') {
+        output = Array.from({ length: outputsCount }, (v, i) => i)
       } else {
-        console.warn(`dmx-fixtures(scheduler): sendEffect(): effect "${effectName}" was not found in effects definition.`)
+        output = [0]
       }
+      const data = Array.from({ length: outputsCount })
+      output.forEach(o => { data[o] = effect })
+      send(data)
+      scheduleNestedEffects(send, effect)
     }
 
-    const schedule = (delay, effects, send) => {
+
+    const sendEffectByName = (send, effectName) => {
+      const effect = scenario.effects[effectName]
+      if (effect) {
+        sendEffect(send, effect)
+      } else {
+        console.warn(`dmx-fixtures(scheduler): sendEffectByName(): effect "${effectName}" was not found in effects definition.`)
+      }
+    }
+  
+
+    const schedule = (delay, effectNames, send) => {
       const id = timers.length
       const t = setTimeout(() => {
-        if (Array.isArray(effects)) {
-          effects.forEach(effect => sendEffect(send, effect))
+        if (Array.isArray(effectNames)) {
+          effectNames.forEach(effect => sendEffectByName(send, effect))
         } else {
-          sendEffect(send, effects)
+          sendEffectByName(send, effectNames)
         }
         timers.splice(timers.findIndex(t => t.id === id), 1)
         updateStatus()
       }, delay)
+
       timers.push({t, id})
-      console.log(`dmx-fixtures(scheduler): schedule(): scheduled effects "${effects}" with delay ${delay}.`)
+      console.log(`dmx-fixtures(scheduler): schedule(): scheduled effectNames "${effectNames}" with delay ${delay}.`)
       console.log('dmx-fixtures(scheduler): schedule(): timers=', timers.length)
+    }
+
+
+    const scheduleNestedEffects = (send, effect) => {
+      if (effect.fade) {
+        const { duration, steps, prop, to } = effect.fade
+        if (!steps) {
+          console.warn(`invalid value for "steps":`, steps)
+          return
+        }
+        const src = effect[prop]
+        if (typeof src !== typeof to) {
+          console.warn(`invalid "to" value: must be of the same type as the "${prop}" property.`)
+          return
+        }
+
+        const effectCopy = JSON.parse(JSON.stringify(effect))
+        if (isNumber(src)) {
+          const stepVal = (to - src) / steps
+          delete effectCopy.fade
+          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
+          for (let s = 0; s < steps; s++) {
+            nestedTimers.push(setTimeout(() => {
+              effectCopy[prop] += stepVal
+              if (effectCopy[prop] < 0) effectCopy[prop] = 0
+              if (effectCopy[prop] > 255) effectCopy[prop] = 255
+              sendEffect(send, effectCopy)
+            }, (duration / steps) * (s + 1)))
+          }
+        } else if (Array.isArray(src)) {
+          const stepVals = src.map((v, i) => (to[i] - v) / steps)
+          delete effectCopy.fade
+          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
+          for (let s = 0; s < steps; s++) {
+            nestedTimers.push(setTimeout(() => {
+              effectCopy[prop].forEach((v, i, a) => {
+                a[i] = v += stepVals[i]
+                if (a[i] < 0) a[i] = 0
+                if (a[i] > 255) a[i] = 255
+              })
+              sendEffect(send, effectCopy)
+            }, (duration / steps) * (s + 1)))
+          }
+        }
+      }
     }
 
     this.on('input', async (msg, send, done) => {
