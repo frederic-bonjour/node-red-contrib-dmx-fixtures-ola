@@ -87,6 +87,75 @@
         delete this.scenarioEditor;
     }
   });
+
+  RED.nodes.registerType('scene definition', {
+    category: 'lighting',
+    color: '#CC6699',
+    defaults: {
+      name: {
+        value: '',
+        required: true
+      },
+      scenario: {
+        value: ''
+      }
+    },
+    inputs: 1,
+    outputs: 1,
+    outputLabels: 'to scenes manager',
+    icon: "batch.svg",
+    label: function() {
+      return this.name || 'scene definition'
+    },
+
+    oneditprepare: function() {
+      this.scenarioEditor = RED.editor.createEditor({
+        id: 'node-input-scenario-editor',
+        mode: 'ace/mode/yaml',
+        value: this.scenario
+      });
+    },
+    oneditsave: function() {
+      this.scenario = this.scenarioEditor.getValue();
+      this.scenarioEditor.destroy();
+      delete this.scenarioEditor;
+    },
+    oneditcancel: function() {
+        this.scenarioEditor.destroy();
+        delete this.scenarioEditor;
+    }
+  });
+
+
+  RED.nodes.registerType('scenes manager', {
+    category: 'lighting',
+    color: '#CC6699',
+    defaults: {
+      name: {
+        value: ''
+      },
+      outputs: {
+        value: 1,
+        required: true,
+        validate: RED.validators.number()
+      },
+      interval: {
+        value: 10,
+        required: true,
+        validate: RED.validators.number()
+      }
+    },
+    inputs: 1,
+    outputs: 1,
+    outputLabels: function(index) {
+      return `to dmx fixture ${index}`
+    },
+    icon: "batch.svg",
+    label: function() {
+      return this.name || 'scenes manager'
+    }
+  });
+
 </script>
 
 <script type="text/html" data-help-name="dmx par">
@@ -132,6 +201,38 @@
   <div class="form-row">
     <label for="node-input-scenario-editor">Scenario</label>
     <div style="height: 450px; min-height:150px;" class="node-text-editor" id="node-input-scenario-editor"></div>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="scene definition">
+  <p>A simple node that represents a scene definition.</p>
+</script>
+<script type="text/html" data-template-name="scene definition">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name" placeholder="Scenario 1">
+  </div>
+  <div class="form-row">
+    <label for="node-input-scenario-editor">Scenario</label>
+    <div style="height: 450px; min-height:150px;" class="node-text-editor" id="node-input-scenario-editor"></div>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="scenes manager">
+  <p>A node that manages multiple scenes.</p>
+</script>
+<script type="text/html" data-template-name="scenes manager">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name" placeholder="Scenario 1">
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputs">Outputs</label>
+    <input type="text" id="node-input-outputs" placeholder="Number of outputs">
+  </div>
+  <div class="form-row">
+    <label for="node-input-interval">Interval</label>
+    <input type="text" id="node-input-interval" placeholder="Interval (ms)">
   </div>
 </script>
 

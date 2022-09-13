@@ -409,4 +409,325 @@ module.exports = function(RED) {
   }
 
   RED.nodes.registerType("scheduler", DmxScheduler);
+
+
+
+
+  function DmxSceneDefinition(config) {
+    RED.nodes.createNode(this, config);
+    const scenario = YAML.parse(config.scenario)
+    const name = config.name
+    for (const [time, effect] of Object.entries(scenario.timeline)) {
+      if (effect !== 'stop') scenario.timeline[time] = { effect }
+    }
+
+    this.send({
+      topic: 'define',
+      name,
+      payload: scenario
+    })
+
+    this.on('input', async (msg, send, done) => {
+      send({
+        topic: 'define',
+        name,
+        payload: scenario
+      })
+      done()
+    });
+  }
+
+  RED.nodes.registerType("scene definition", DmxSceneDefinition);
+
+  const makeSceneEntry = (entry) => {
+    return {
+      time: 0,
+      scene: entry
+    }
+  }
+
+  function Stack() {
+    this.entries = []
+    this.cursor = -1
+
+    this.push = (scene) => {
+      this.pause()
+      this.entries.push(makeSceneEntry(scene))
+      this.cursor = this.entries.length - 1
+      this.resetCurrentEntry()
+    }
+
+    this.overlay = (scene) => {
+      this.entries.push(makeSceneEntry(scene))
+      this.cursor = this.entries.length - 1
+      this.resetCurrentEntry()
+    }
+
+    this.pause = () => {
+      const E = this.getCurrentEntry()
+      if (E) {
+        E.paused = true
+        console.log('paused scene', this.cursor, 'at', E.time)
+      } else {
+        console.warn('could not pause: current entry is null.')
+      }
+    }
+
+    this.resetCurrentEntry = () => {
+      const E = this.getCurrentEntry()
+      if (E) {
+        for (const [key, item] of Object.entries(E.scene.timeline)) {
+          item._handled = false
+        }      
+      }
+    }
+
+    this.resume = () => {
+      const E = this.getCurrentEntry()
+      if (E) {
+        E.paused = false
+        console.log('resumed scene', this.cursor, 'at', E.time)
+        // TODO play last played item before pause
+      } else {
+        console.warn('could not resume: current entry is null.')
+      }
+    }
+
+    this.pop = () => {
+      this.entries.pop()
+      this.cursor = this.entries.length - 1
+      this.resume()
+    }
+
+    this.replace = (scene) => {
+      this.entries = [makeSceneEntry(scene)]
+      this.cursor = 0
+      this.resetCurrentEntry()
+      console.log('STACK.replace()\nentries:', this.entries)
+    }
+
+    this.getCurrentEntry = () => {
+      if (this.cursor !== -1) {
+        return this.entries[this.cursor]
+      }
+      return null
+    }
+
+    this.tick = (interval) => {
+      this.entries.forEach(entry => {
+        if (!entry.paused) {
+          entry.time += interval
+        }
+      })
+    }
+  }
+
+
+  function DmxScenesManager(config) {
+    // Config
+    RED.nodes.createNode(this, config)
+    const outputsCount = parseInt(config.outputs, 10)
+    const INTERVAL = config.interval ? parseInt(config.interval) : 10
+
+    // Internal vars
+
+    const STACK = new Stack()
+    const SCENES = {}
+    const NESTED_TIMERS = []
+
+
+    // Internal funcs
+
+    const clearNestedTimers = () => {
+      NESTED_TIMERS.forEach(t => clearTimeout(t))
+      NESTED_TIMERS.length = 0
+    }
+
+    const handlePlay = (payload) => {
+      const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
+      if (SCENE) {
+        clearNestedTimers()
+        STACK.replace(SCENE)
+      }
+      else console.warn('dmx-fixtures(scenes manager): play: undefined scene:', SCENE)
+    }
+    
+    const handlePush = (payload) => {
+        const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
+        if (SCENE) {
+          clearNestedTimers()
+          STACK.push(SCENE)
+        }
+        else console.warn('dmx-fixtures(scenes manager): push: undefined scene:', SCENE)
+    }
+    
+    const handleOverlay = (payload) => {
+        const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
+        if (SCENE) {
+          clearNestedTimers()
+          STACK.overlay(SCENE)
+        }
+        else console.warn('dmx-fixtures(scenes manager): overlay: undefined scene:', SCENE)
+    }
+
+    const scheduleNestedEffects = (send, effect) => {
+      if (effect.fade) {
+        const { duration, steps, prop, to } = effect.fade
+        if (!steps) {
+          console.warn(`invalid value for "steps":`, steps)
+          return
+        }
+        const src = effect[prop]
+        if (typeof src !== typeof to) {
+          console.warn(`invalid "to" value: must be of the same type as the "${prop}" property.`)
+          return
+        }
+
+        const effectCopy = JSON.parse(JSON.stringify(effect))
+        if (isNumber(src)) {
+          const stepVal = (to - src) / steps
+          delete effectCopy.fade
+          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
+          for (let s = 0; s < steps; s++) {
+            NESTED_TIMERS.push(setTimeout(() => {
+              effectCopy[prop] += stepVal
+              if (effectCopy[prop] < 0) effectCopy[prop] = 0
+              if (effectCopy[prop] > 255) effectCopy[prop] = 255
+              sendEffect(send, effectCopy)
+            }, (duration / steps) * (s + 1)))
+          }
+        } else if (Array.isArray(src)) {
+          const stepVals = src.map((v, i) => (to[i] - v) / steps)
+          delete effectCopy.fade
+          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
+          for (let s = 0; s < steps; s++) {
+            NESTED_TIMERS.push(setTimeout(() => {
+              effectCopy[prop].forEach((v, i, a) => {
+                a[i] = v += stepVals[i]
+                if (a[i] < 0) a[i] = 0
+                if (a[i] > 255) a[i] = 255
+              })
+              sendEffect(send, effectCopy)
+            }, (duration / steps) * (s + 1)))
+          }
+        }
+      }
+    }
+
+    const sendEffect = (send, effect) => {
+      if (!effect) return
+      let output
+      if (Array.isArray(effect.output)) {
+        output = effect.output
+      } else if (isNumber(effect.output)) {
+        output = [effect.output]
+      } else if (effect.output === 'all') {
+        output = Array.from({ length: outputsCount }, (v, i) => i)
+      } else {
+        output = [0]
+      }
+      const data = Array.from({ length: outputsCount })
+      output.forEach(o => { data[o] = effect })
+      send(data)
+      scheduleNestedEffects(send, effect)
+    }
+
+    const resumeScene = (send) => {
+      const E = STACK.getCurrentEntry()
+      if (!E) return
+      const item = E.scene.timeline.resume
+      if (item) {
+        if (Array.isArray(item.effect)) {
+          item.effect.forEach(effect => {
+            console.log('resume: item', effect, E.scene.effects[item.effect])
+            sendEffect(send, E.scene.effects[effect])
+          })
+        } else if (item.effect) {
+          console.log('resume: item', item.effect, E.scene.effects[item.effect])
+          sendEffect(send, E.scene.effects[item.effect])
+        }
+      }
+    }
+
+    const makeTick = (send) => {
+      return () => {
+        STACK.tick(INTERVAL)
+        const E = STACK.getCurrentEntry()
+        if (!E || E.paused) return
+        for (const [key, item] of Object.entries(E.scene.timeline)) {
+          if (!item._handled) {
+            if (key !== 'resume') {
+              const offset = key.endsWith('s')
+                ? parseFloat(key) * 1000
+                : parseInt(key, 10)
+              if (offset <= E.time) {
+                console.log('>>>', E.time)
+                if (item === 'stop') {
+                  STACK.pop()
+                  resumeScene(send)
+                } else {
+                  item._handled = true
+                  if (Array.isArray(item.effect)) {
+                    item.effect.forEach(effect => {
+                      sendEffect(send, E.scene.effects[effect])
+                    })
+                  } else if (item.effect) {
+                    sendEffect(send, E.scene.effects[item.effect])
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let interval = null
+
+    this.on('input', async (msg, send, done) => {
+      switch (msg.topic) {
+        case 'define':
+            SCENES[msg.name] = msg.payload
+            console.log('dmx-fixtures(scenes manager): defined scene', msg.name)
+            break
+        case 'play':
+            handlePlay(msg.payload)
+            break
+        case 'push':
+            handlePush(msg.payload)
+            break
+        case 'overlay':
+            handleOverlay(msg.payload)
+            break
+        case 'pop':
+            STACK.pop()
+            resumeScene(send)
+            break
+        case 'pause':
+            STACK.pause()
+            break
+        case 'resume':
+            STACK.resume()
+            resumeScene(send)
+            break
+        case 'reset':
+            // TODO
+            break
+      }
+
+      if (!interval) {
+        interval = setInterval(makeTick(send), INTERVAL)
+        console.log('dmx-fixtures(scenes manager): started ticker.')
+      }
+      done()
+    });
+
+    this.on('close', function() {
+      clearInterval(interval)
+      console.log('dmx-fixtures(scenes manager): stopped ticker.')
+    })
+  }
+
+  RED.nodes.registerType("scenes manager", DmxScenesManager);
+
 };
