@@ -366,7 +366,7 @@ module.exports = function(RED) {
         if (isNumber(src)) {
           const stepVal = (to - src) / steps
           delete effectCopy.fade
-          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
+          // console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
           for (let s = 0; s < steps; s++) {
             nestedTimers.push(setTimeout(() => {
               effectCopy[prop] += stepVal
@@ -378,7 +378,7 @@ module.exports = function(RED) {
         } else if (Array.isArray(src)) {
           const stepVals = src.map((v, i) => (to[i] - v) / steps)
           delete effectCopy.fade
-          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
+          // console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
           for (let s = 0; s < steps; s++) {
             nestedTimers.push(setTimeout(() => {
               effectCopy[prop].forEach((v, i, a) => {
@@ -433,14 +433,14 @@ module.exports = function(RED) {
       return
     }
 
-    delete effect.fade
     const nestedEffects = {}
 
     if (isNumber(src)) {
       const stepVal = (to - src) / steps
-      console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
+      // console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
       for (let s = 1; s <= steps; s++) {
         const effectCopy = JSON.parse(JSON.stringify(effect))
+        delete effectCopy.fade
         effectCopy[prop] = Math.round(effectCopy[prop] + (stepVal * s))
         if (effectCopy[prop] < 0) effectCopy[prop] = 0
         if (effectCopy[prop] > 255) effectCopy[prop] = 255
@@ -448,9 +448,10 @@ module.exports = function(RED) {
       }
     } else if (Array.isArray(src)) {
       const stepVals = src.map((v, i) => (to[i] - v) / steps)
-      console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
+      // console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
       for (let s = 1; s <= steps; s++) {
         const effectCopy = JSON.parse(JSON.stringify(effect))
+        delete effectCopy.fade
         effectCopy[prop].forEach((v, i, a) => {
           a[i] = Math.round(v += (stepVals[i] * s))
           if (a[i] < 0) a[i] = 0
@@ -480,35 +481,48 @@ module.exports = function(RED) {
 
   function DmxSceneDefinition(config) {
     RED.nodes.createNode(this, config);
-    const scenario = YAML.parse(config.scenario)
     const name = config.name
-    for (const [time, effectNames] of Object.entries(scenario.timeline)) {
-      // The "stop" effect is a special one that ends the scene.
-      if (effectNames !== 'END' && effectNames !== 'ROOT') scenario.timeline[time] = { effect: effectNames }
-      const effects = Array.isArray(effectNames)
-        ? effectNames.map(en => scenario.effects[en])
-        : [scenario.effects[effectNames]]
-      const timeKey = parseTimeKey(time)
-      for (effect of effects) {
-        const nestedEffects = generateNestedEffects(timeKey, effect)
-        if (nestedEffects) {
-          mergeNestedEffects(scenario.timeline, nestedEffects)
+
+    const buildScene = () => {
+      const scenario = YAML.parse(config.scenario)
+      for (let [time, effectNames] of Object.entries(scenario.timeline)) {
+
+        // Trim
+        if (Array.isArray(effectNames)) {
+          effectNames = effectNames.map(en => en.trim())
+        } else {
+          effectNames = effectNames.trim()
+        }
+
+        // The "END" and "ROOT" effects are a special ones that end the scene.
+        if (effectNames !== 'END' && effectNames !== 'ROOT') scenario.timeline[time] = { effect: effectNames }
+
+        const effects = Array.isArray(effectNames)
+          ? effectNames.map(en => scenario.effects[en])
+          : [scenario.effects[effectNames]]
+
+        const timeKey = parseTimeKey(time)
+        for (effect of effects) {
+          const nestedEffects = generateNestedEffects(timeKey, effect)
+          if (nestedEffects) {
+            mergeNestedEffects(scenario.timeline, nestedEffects)
+          }
         }
       }
+      return scenario
     }
-    console.log(`scenario "${name}":`, scenario)
-
+    
     this.send({
       topic: 'define',
       name,
-      payload: scenario
+      payload: buildScene()
     })
 
     this.on('input', async (msg, send, done) => {
       send({
         topic: 'define',
         name,
-        payload: scenario
+        payload: buildScene()
       })
       done()
     });
@@ -552,7 +566,7 @@ module.exports = function(RED) {
 
     this.resetCurrentEntry = () => {
       const E = this.getCurrentEntry()
-      delete E.lastSentEffect
+      delete E.lastSentEffects
       if (E) {
         for (const [key, item] of Object.entries(E.scene.timeline)) {
           item._handled = false
@@ -564,8 +578,6 @@ module.exports = function(RED) {
       const E = this.getCurrentEntry()
       if (E) {
         E.paused = false
-        console.log('resumed scene', this.cursor, 'at', E.time)
-        // TODO play last played item before pause
       } else {
         console.warn('could not resume: current entry is null.')
       }
@@ -619,11 +631,12 @@ module.exports = function(RED) {
 
     // Internal funcs
     const handlePlay = (payload) => {
+      console.log('dmx-fixtures(scenes player): playing scene:', payload)
       const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
       if (SCENE) {
         STACK.replace(SCENE)
       }
-      else console.warn('dmx-fixtures(scenes manager): play: undefined scene:', SCENE)
+      else console.warn('dmx-fixtures(scenes player): play: undefined scene:', SCENE)
     }
     
     const handlePush = (payload) => {
@@ -631,7 +644,7 @@ module.exports = function(RED) {
         if (SCENE) {
           STACK.push(SCENE)
         }
-        else console.warn('dmx-fixtures(scenes manager): push: undefined scene:', SCENE)
+        else console.warn('dmx-fixtures(scenes player): push: undefined scene:', SCENE)
     }
     
     const handleOverlay = (payload) => {
@@ -639,7 +652,7 @@ module.exports = function(RED) {
         if (SCENE) {
           STACK.overlay(SCENE)
         }
-        else console.warn('dmx-fixtures(scenes manager): overlay: undefined scene:', SCENE)
+        else console.warn('dmx-fixtures(scenes player): overlay: undefined scene:', SCENE)
     }
 
     const sendEffect = (send, effect) => {
@@ -662,8 +675,8 @@ module.exports = function(RED) {
     const resumeScene = (send) => {
       const E = STACK.getCurrentEntry()
       if (!E) return
-      if (E.lastSentEffect) {
-        E.lastSentEffect.forEach(effect => sendEffect(send, effect))
+      if (E.lastSentEffects) {
+        E.lastSentEffects.forEach(effect => sendEffect(send, effect))
       }
     }
 
@@ -684,19 +697,19 @@ module.exports = function(RED) {
                 resumeScene(send)
               } else {
                 item._handled = true
-                E.lastSentEffect = []
+                E.lastSentEffects = []
                 if (Array.isArray(item.effect)) {
                   item.effect.forEach(e => {
                     if (typeof e === 'string') {
                       e = E.scene.effects[e]
                     }
                     sendEffect(send, e)
-                    E.lastSentEffect.push(e)
+                    E.lastSentEffects.push(e)
                   })
                 } else if (item.effect) {
                   const e = typeof item.effect === 'string' ? E.scene.effects[item.effect] : item.effect
                   sendEffect(send, e)
-                  E.lastSentEffect.push(e)
+                  E.lastSentEffects.push(e)
                 }
               }
             }
@@ -711,7 +724,7 @@ module.exports = function(RED) {
       switch (msg.topic) {
         case 'define':
             SCENES[msg.name] = msg.payload
-            console.log('dmx-fixtures(scenes manager): defined scene', msg.name)
+            console.log(`dmx-fixtures(scenes player): defined scene "${msg.name}"`)
             break
         case 'play':
             handlePlay(msg.payload)
@@ -744,14 +757,14 @@ module.exports = function(RED) {
 
       if (!interval) {
         interval = setInterval(makeTick(send), INTERVAL)
-        console.log('dmx-fixtures(scenes manager): started ticker.')
+        console.log('dmx-fixtures(scenes player): started ticker.')
       }
       done()
     });
 
     this.on('close', function() {
       clearInterval(interval)
-      console.log('dmx-fixtures(scenes manager): stopped ticker.')
+      console.log('dmx-fixtures(scenes player): stopped ticker.')
     })
   }
 
