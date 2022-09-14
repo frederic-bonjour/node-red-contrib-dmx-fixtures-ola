@@ -411,15 +411,92 @@ module.exports = function(RED) {
   RED.nodes.registerType("scheduler", DmxScheduler);
 
 
+  function parseTimeKey(time) {
+    if (time.endsWith('s')) {
+      return parseFloat(time) * 1000
+    }
+    return parseInt(time)
+  }
+
+
+  function generateNestedEffects(baseTimeKey, effect) {
+    if (!effect || !effect.fade) return
+    const { duration, steps, prop, to } = effect.fade
+
+    if (!steps) {
+      console.warn(`invalid value for "steps":`, steps)
+      return
+    }
+    const src = effect[prop]
+    if (typeof src !== typeof to) {
+      console.warn(`invalid "to" value: must be of the same type as the "${prop}" property.`)
+      return
+    }
+
+    delete effect.fade
+    const nestedEffects = {}
+
+    if (isNumber(src)) {
+      const stepVal = (to - src) / steps
+      console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
+      for (let s = 1; s <= steps; s++) {
+        const effectCopy = JSON.parse(JSON.stringify(effect))
+        effectCopy[prop] = Math.round(effectCopy[prop] + (stepVal * s))
+        if (effectCopy[prop] < 0) effectCopy[prop] = 0
+        if (effectCopy[prop] > 255) effectCopy[prop] = 255
+        nestedEffects[baseTimeKey + (duration / steps) * s] = effectCopy
+      }
+    } else if (Array.isArray(src)) {
+      const stepVals = src.map((v, i) => (to[i] - v) / steps)
+      console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
+      for (let s = 1; s <= steps; s++) {
+        const effectCopy = JSON.parse(JSON.stringify(effect))
+        effectCopy[prop].forEach((v, i, a) => {
+          a[i] = Math.round(v += (stepVals[i] * s))
+          if (a[i] < 0) a[i] = 0
+          if (a[i] > 255) a[i] = 255
+        })
+        nestedEffects[baseTimeKey + (duration / steps) * s] = effectCopy
+      }
+    }
+
+    return nestedEffects
+  }
+
+  function mergeNestedEffects(timeline, effects) {
+    for (const [time, effect] of Object.entries(effects)) {
+      if (timeline[time]) {
+        if (Array.isArray(timeline[time].effect)) {
+          timeline[time].effect.push(effect)
+        } else {
+          timeline[time].effect = [timeline[time].effect, effect]
+        }
+      } else {
+        timeline[time] = { effect }
+      }
+    }
+  }
 
 
   function DmxSceneDefinition(config) {
     RED.nodes.createNode(this, config);
     const scenario = YAML.parse(config.scenario)
     const name = config.name
-    for (const [time, effect] of Object.entries(scenario.timeline)) {
-      if (effect !== 'stop') scenario.timeline[time] = { effect }
+    for (const [time, effectNames] of Object.entries(scenario.timeline)) {
+      // The "stop" effect is a special one that ends the scene.
+      if (effectNames !== 'END' && effectNames !== 'ROOT') scenario.timeline[time] = { effect: effectNames }
+      const effects = Array.isArray(effectNames)
+        ? effectNames.map(en => scenario.effects[en])
+        : [scenario.effects[effectNames]]
+      const timeKey = parseTimeKey(time)
+      for (effect of effects) {
+        const nestedEffects = generateNestedEffects(timeKey, effect)
+        if (nestedEffects) {
+          mergeNestedEffects(scenario.timeline, nestedEffects)
+        }
+      }
     }
+    console.log(`scenario "${name}":`, scenario)
 
     this.send({
       topic: 'define',
@@ -475,10 +552,11 @@ module.exports = function(RED) {
 
     this.resetCurrentEntry = () => {
       const E = this.getCurrentEntry()
+      delete E.lastSentEffect
       if (E) {
         for (const [key, item] of Object.entries(E.scene.timeline)) {
           item._handled = false
-        }      
+        }
       }
     }
 
@@ -499,11 +577,16 @@ module.exports = function(RED) {
       this.resume()
     }
 
+    this.root = () => {
+      if (this.entries.length > 1) this.entries.length = 1
+      this.cursor = this.entries.length - 1
+      this.resume()
+    }
+
     this.replace = (scene) => {
       this.entries = [makeSceneEntry(scene)]
       this.cursor = 0
       this.resetCurrentEntry()
-      console.log('STACK.replace()\nentries:', this.entries)
     }
 
     this.getCurrentEntry = () => {
@@ -523,7 +606,7 @@ module.exports = function(RED) {
   }
 
 
-  function DmxScenesManager(config) {
+  function DmxScenesPlayer(config) {
     // Config
     RED.nodes.createNode(this, config)
     const outputsCount = parseInt(config.outputs, 10)
@@ -533,20 +616,11 @@ module.exports = function(RED) {
 
     const STACK = new Stack()
     const SCENES = {}
-    const NESTED_TIMERS = []
-
 
     // Internal funcs
-
-    const clearNestedTimers = () => {
-      NESTED_TIMERS.forEach(t => clearTimeout(t))
-      NESTED_TIMERS.length = 0
-    }
-
     const handlePlay = (payload) => {
       const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
       if (SCENE) {
-        clearNestedTimers()
         STACK.replace(SCENE)
       }
       else console.warn('dmx-fixtures(scenes manager): play: undefined scene:', SCENE)
@@ -555,7 +629,6 @@ module.exports = function(RED) {
     const handlePush = (payload) => {
         const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
         if (SCENE) {
-          clearNestedTimers()
           STACK.push(SCENE)
         }
         else console.warn('dmx-fixtures(scenes manager): push: undefined scene:', SCENE)
@@ -564,54 +637,9 @@ module.exports = function(RED) {
     const handleOverlay = (payload) => {
         const SCENE = typeof payload === 'string' ? SCENES[payload] : payload
         if (SCENE) {
-          clearNestedTimers()
           STACK.overlay(SCENE)
         }
         else console.warn('dmx-fixtures(scenes manager): overlay: undefined scene:', SCENE)
-    }
-
-    const scheduleNestedEffects = (send, effect) => {
-      if (effect.fade) {
-        const { duration, steps, prop, to } = effect.fade
-        if (!steps) {
-          console.warn(`invalid value for "steps":`, steps)
-          return
-        }
-        const src = effect[prop]
-        if (typeof src !== typeof to) {
-          console.warn(`invalid "to" value: must be of the same type as the "${prop}" property.`)
-          return
-        }
-
-        const effectCopy = JSON.parse(JSON.stringify(effect))
-        if (isNumber(src)) {
-          const stepVal = (to - src) / steps
-          delete effectCopy.fade
-          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVal=${stepVal}).`)
-          for (let s = 0; s < steps; s++) {
-            NESTED_TIMERS.push(setTimeout(() => {
-              effectCopy[prop] += stepVal
-              if (effectCopy[prop] < 0) effectCopy[prop] = 0
-              if (effectCopy[prop] > 255) effectCopy[prop] = 255
-              sendEffect(send, effectCopy)
-            }, (duration / steps) * (s + 1)))
-          }
-        } else if (Array.isArray(src)) {
-          const stepVals = src.map((v, i) => (to[i] - v) / steps)
-          delete effectCopy.fade
-          console.log(`will fade "${prop}" from "${src}" to "${to}" over ${steps} steps (stepVals=${stepVals}).`)
-          for (let s = 0; s < steps; s++) {
-            NESTED_TIMERS.push(setTimeout(() => {
-              effectCopy[prop].forEach((v, i, a) => {
-                a[i] = v += stepVals[i]
-                if (a[i] < 0) a[i] = 0
-                if (a[i] > 255) a[i] = 255
-              })
-              sendEffect(send, effectCopy)
-            }, (duration / steps) * (s + 1)))
-          }
-        }
-      }
     }
 
     const sendEffect = (send, effect) => {
@@ -629,23 +657,13 @@ module.exports = function(RED) {
       const data = Array.from({ length: outputsCount })
       output.forEach(o => { data[o] = effect })
       send(data)
-      scheduleNestedEffects(send, effect)
     }
 
     const resumeScene = (send) => {
       const E = STACK.getCurrentEntry()
       if (!E) return
-      const item = E.scene.timeline.resume
-      if (item) {
-        if (Array.isArray(item.effect)) {
-          item.effect.forEach(effect => {
-            console.log('resume: item', effect, E.scene.effects[item.effect])
-            sendEffect(send, E.scene.effects[effect])
-          })
-        } else if (item.effect) {
-          console.log('resume: item', item.effect, E.scene.effects[item.effect])
-          sendEffect(send, E.scene.effects[item.effect])
-        }
+      if (E.lastSentEffect) {
+        E.lastSentEffect.forEach(effect => sendEffect(send, effect))
       }
     }
 
@@ -656,24 +674,29 @@ module.exports = function(RED) {
         if (!E || E.paused) return
         for (const [key, item] of Object.entries(E.scene.timeline)) {
           if (!item._handled) {
-            if (key !== 'resume') {
-              const offset = key.endsWith('s')
-                ? parseFloat(key) * 1000
-                : parseInt(key, 10)
-              if (offset <= E.time) {
-                console.log('>>>', E.time)
-                if (item === 'stop') {
-                  STACK.pop()
-                  resumeScene(send)
-                } else {
-                  item._handled = true
-                  if (Array.isArray(item.effect)) {
-                    item.effect.forEach(effect => {
-                      sendEffect(send, E.scene.effects[effect])
-                    })
-                  } else if (item.effect) {
-                    sendEffect(send, E.scene.effects[item.effect])
-                  }
+            const offset = parseTimeKey(key)
+            if (offset <= E.time) {
+              if (item === 'END') {
+                STACK.pop()
+                resumeScene(send)
+              } else if (item === 'ROOT') {
+                STACK.root()
+                resumeScene(send)
+              } else {
+                item._handled = true
+                E.lastSentEffect = []
+                if (Array.isArray(item.effect)) {
+                  item.effect.forEach(e => {
+                    if (typeof e === 'string') {
+                      e = E.scene.effects[e]
+                    }
+                    sendEffect(send, e)
+                    E.lastSentEffect.push(e)
+                  })
+                } else if (item.effect) {
+                  const e = typeof item.effect === 'string' ? E.scene.effects[item.effect] : item.effect
+                  sendEffect(send, e)
+                  E.lastSentEffect.push(e)
                 }
               }
             }
@@ -703,6 +726,10 @@ module.exports = function(RED) {
             STACK.pop()
             resumeScene(send)
             break
+        case 'root':
+            STACK.root()
+            resumeScene(send)
+            break
         case 'pause':
             STACK.pause()
             break
@@ -728,6 +755,6 @@ module.exports = function(RED) {
     })
   }
 
-  RED.nodes.registerType("scenes manager", DmxScenesManager);
+  RED.nodes.registerType("scenes player", DmxScenesPlayer);
 
 };

@@ -127,7 +127,7 @@
   });
 
 
-  RED.nodes.registerType('scenes manager', {
+  RED.nodes.registerType('scenes player', {
     category: 'lighting',
     color: '#CC6699',
     defaults: {
@@ -152,7 +152,7 @@
     },
     icon: "batch.svg",
     label: function() {
-      return this.name || 'scenes manager'
+      return this.name || 'scenes player'
     }
   });
 
@@ -218,10 +218,10 @@
   </div>
 </script>
 
-<script type="text/html" data-help-name="scenes manager">
+<script type="text/html" data-help-name="scenes player">
   <p>A node that manages multiple scenes.</p>
 </script>
-<script type="text/html" data-template-name="scenes manager">
+<script type="text/html" data-template-name="scenes player">
   <div class="form-row">
     <label for="node-input-name">Name</label>
     <input type="text" id="node-input-name" placeholder="Scenario 1">
