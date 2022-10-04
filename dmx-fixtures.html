@@ -1,5 +1,4 @@
 <script type="text/javascript">
-
   RED.nodes.registerType('dmx par', {
       category: 'lighting',
       color: '#CC6699',
@@ -121,8 +120,19 @@
       delete this.scenarioEditor;
     },
     oneditcancel: function() {
-        this.scenarioEditor.destroy();
-        delete this.scenarioEditor;
+      this.scenarioEditor.destroy();
+      delete this.scenarioEditor;
+    },
+    oneditresize: function (size) {
+      var rows = $("#dialog-form>div:not(.form-row-text-editor)");
+      var height = $("#dialog-form").height();
+      for (var i = 0; i < rows.size(); i++) {
+        height -= $(rows[i]).outerHeight(true);
+      }
+      var editorRow = $("#dialog-form>div.form-row-text-editor");
+      height -= (parseInt(editorRow.css("marginTop")) + parseInt(editorRow.css("marginBottom")));
+      $(".node-text-editor").css("height", height + "px");
+      this.scenarioEditor.resize();
     }
   });
 
@@ -212,7 +222,7 @@
     <label for="node-input-name">Name</label>
     <input type="text" id="node-input-name" placeholder="Scenario 1">
   </div>
-  <div class="form-row">
+  <div class="form-row form-row-text-editor">
     <label for="node-input-scenario-editor">Scenario</label>
     <div style="height: 450px; min-height:150px;" class="node-text-editor" id="node-input-scenario-editor"></div>
   </div>

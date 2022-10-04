@@ -419,7 +419,7 @@ module.exports = function(RED) {
   }
 
 
-  function generateNestedEffects(baseTimeKey, effect) {
+  function generateFadeEffects(baseTimeKey, effect) {
     if (!effect || !effect.fade) return
     const { duration, steps, prop, to } = effect.fade
 
@@ -485,30 +485,80 @@ module.exports = function(RED) {
 
     const buildScene = () => {
       const scenario = YAML.parse(config.scenario)
-      for (let [time, effectNames] of Object.entries(scenario.timeline)) {
+      return buildTimeline(scenario, scenario.timeline)
+    }
 
+    const buildNestedTimeline = (scenario, prevTimeKey, srcTimeline, dstTimeline) => {
+      const nested = {}
+      for (let [time, entry] of Object.entries(srcTimeline)) {
+
+        let effectNames = entry.e ? entry.e : entry
         // Trim
         if (Array.isArray(effectNames)) {
           effectNames = effectNames.map(en => en.trim())
-        } else {
+        } else if (typeof effectNames === 'string') {
           effectNames = effectNames.trim()
         }
 
-        // The "END" and "ROOT" effects are a special ones that end the scene.
-        if (effectNames !== 'END' && effectNames !== 'ROOT') scenario.timeline[time] = { effect: effectNames }
+        const effects = Array.isArray(effectNames)
+          ? effectNames.map(en => scenario.effects[en])
+          : [scenario.effects[effectNames]]
+
+        const timeKey = parseTimeKey(time) + prevTimeKey
+
+        // The "END" and "ROOT" effects are special ones that end the scene.
+        if (effectNames !== 'END' && effectNames !== 'ROOT') dstTimeline[timeKey] = { effect: effectNames }
+
+        for (effect of effects) {
+          const nestedEffects = generateFadeEffects(timeKey, effect)
+          if (nestedEffects) {
+            mergeNestedEffects(timeline, nestedEffects)
+          }
+        }
+
+        if (entry.e && entry.t) {
+          const nestedEffects = buildNestedTimeline(scenario, timeKey, entry.t, dstTimeline)
+          mergeNestedEffects(dstTimeline, nestedEffects)
+        }
+      }
+      return nested
+    }
+
+
+    const buildTimeline = (scenario, timeline) => {
+      for (let [time, entry] of Object.entries(timeline)) {
+
+        let effectNames = entry.e ? entry.e : entry
+        // Trim
+        if (Array.isArray(effectNames)) {
+          effectNames = effectNames.map(en => en.trim())
+        } else if (typeof effectNames === 'string') {
+          effectNames = effectNames.trim()
+        }
 
         const effects = Array.isArray(effectNames)
           ? effectNames.map(en => scenario.effects[en])
           : [scenario.effects[effectNames]]
 
         const timeKey = parseTimeKey(time)
+
+        // The "END" and "ROOT" effects are special ones that end the scene.
+        if (effectNames !== 'END' && effectNames !== 'ROOT') timeline[timeKey] = { effect: effectNames }
+
         for (effect of effects) {
-          const nestedEffects = generateNestedEffects(timeKey, effect)
+          const nestedEffects = generateFadeEffects(timeKey, effect)
           if (nestedEffects) {
-            mergeNestedEffects(scenario.timeline, nestedEffects)
+            mergeNestedEffects(timeline, nestedEffects)
           }
         }
+
+        if (entry.e && entry.t) {
+          const nestedEffects = buildNestedTimeline(scenario, timeKey, entry.t, timeline)
+          mergeNestedEffects(timeline, nestedEffects)
+        }
       }
+
+      console.log(JSON.stringify(scenario, null, 3))
       return scenario
     }
     
@@ -685,9 +735,11 @@ module.exports = function(RED) {
         STACK.tick(INTERVAL)
         const E = STACK.getCurrentEntry()
         if (!E || E.paused) return
+        let prevTimeKey = 0
         for (const [key, item] of Object.entries(E.scene.timeline)) {
           if (!item._handled) {
-            const offset = parseTimeKey(key)
+            const offset = parseTimeKey(key, prevTimeKey)
+            prevTimeKey = offset
             if (offset <= E.time) {
               if (item === 'END') {
                 STACK.pop()
