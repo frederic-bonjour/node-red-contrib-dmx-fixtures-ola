@@ -106,6 +106,7 @@ module.exports = function(RED) {
     }
 
     this.on('input', async (msg, send, done) => {
+      console.log('received msg:', msg)
       const channels = []
       if (msg.topic === 'off') {
         setMode(channels, 'manual')
@@ -141,6 +142,14 @@ module.exports = function(RED) {
               }
             }, msg.blink)
           }
+        }
+
+        if (isNumber(msg.value)) {
+          console.log('send raw value', msg.value, 'to channel', startChannel)
+          channels.push({
+            channel: startChannel,
+            value: msg.value
+          })
         }
       }
       send({
