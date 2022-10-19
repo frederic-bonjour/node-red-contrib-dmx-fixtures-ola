@@ -567,7 +567,6 @@ module.exports = function(RED) {
         }
       }
 
-      console.log(JSON.stringify(scenario, null, 3))
       return scenario
     }
     
@@ -680,7 +679,7 @@ module.exports = function(RED) {
   function DmxScenesPlayer(config) {
     // Config
     RED.nodes.createNode(this, config)
-    const outputsCount = parseInt(config.outputs, 10)
+    const dmxFixturesCount = parseInt(config.dmxFixturesCount, 10)
     const INTERVAL = config.interval ? parseInt(config.interval) : 10
 
     // Internal vars
@@ -722,12 +721,20 @@ module.exports = function(RED) {
       } else if (isNumber(effect.output)) {
         output = [effect.output]
       } else if (effect.output === 'all') {
-        output = Array.from({ length: outputsCount }, (v, i) => i)
+        output = Array.from({ length: dmxFixturesCount }, (v, i) => i)
       } else {
         output = [0]
       }
-      const data = Array.from({ length: outputsCount })
+      const data = Array.from({ length: dmxFixturesCount })
       output.forEach(o => { data[o] = effect })
+      send(data)
+    }
+
+    const sendSyncMessage = (send, topic, payload) => {
+      if (topic) topic = topic.trim()
+      if (payload) payload = payload.trim()
+      const data = Array.from({ length: dmxFixturesCount + 1 })
+      data[dmxFixturesCount] = { topic, payload }
       send(data)
     }
 
@@ -750,27 +757,52 @@ module.exports = function(RED) {
             const offset = parseTimeKey(key, prevTimeKey)
             prevTimeKey = offset
             if (offset <= E.time) {
-              if (item === 'END') {
-                STACK.pop()
-                resumeScene(send)
-              } else if (item === 'ROOT') {
-                STACK.root()
-                resumeScene(send)
+              if (typeof item === 'string') {
+                console.log('---- item=', item)
+                if (item === 'END') {
+                  STACK.pop()
+                  resumeScene(send)
+                } else if (item === 'ROOT') {
+                  STACK.root()
+                  resumeScene(send)
+                } else if (item.startsWith('SYNC ')) {
+                  const [t, p] = item.substring(5).trim().split(',')
+                  sendSyncMessage(send, t, p)
+                }
               } else {
                 item._handled = true
                 E.lastSentEffects = []
                 if (Array.isArray(item.effect)) {
                   item.effect.forEach(e => {
+
                     if (typeof e === 'string') {
-                      e = E.scene.effects[e]
+                      if (e.startsWith('SYNC ')) {
+                        const [t, p] = e.substring(5).trim().split(',')
+                        sendSyncMessage(send, t, p)
+                        e = null
+                      } else {
+                        e = E.scene.effects[e]
+                      }
                     }
-                    sendEffect(send, e)
-                    E.lastSentEffects.push(e)
+                    if (e) {
+                      sendEffect(send, e)
+                      E.lastSentEffects.push(e)
+                    }
                   })
                 } else if (item.effect) {
-                  const e = typeof item.effect === 'string' ? E.scene.effects[item.effect] : item.effect
-                  sendEffect(send, e)
-                  E.lastSentEffects.push(e)
+                  let e
+                  if (typeof item.effect === 'string') {
+                    if (item.effect.startsWith('SYNC ')) {
+                      const [t, p] = item.effect.substring(5).trim().split(',')
+                      sendSyncMessage(send, t, p)
+                    } else {
+                      e = E.scene.effects[item.effect]
+                    }
+                  }
+                  if (e) {
+                    sendEffect(send, e)
+                    E.lastSentEffects.push(e)
+                  }
                 }
               }
             }
